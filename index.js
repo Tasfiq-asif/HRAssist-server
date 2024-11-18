@@ -55,6 +55,9 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+// Global variable for the collection
+let usersCollection;
+
 
 async function run() {
   try {
@@ -62,7 +65,8 @@ async function run() {
     await client.connect();
 
     const db = client.db('HRAssist');
-    const usersCollection = db.collection('users');
+    usersCollection = db.collection('users');
+    const workEntriesCollection = db.collection("workEntries");
 
   // *****************JWT****************
 
@@ -157,6 +161,37 @@ async function run() {
       const result = await usersCollection.findOne({email})
       res.send(result)
     })
+// *****************User Dashboard Related Api****************
+app.get('worksheet/:employeeemail',async (req, res) => {
+  try {
+    const employeeEmail = req.params.employeeemail
+    const workEntries = await workEntriesCollection.find({employeeId}).sort({date:-1}).toArray();
+    res.send(workEntries);
+  } catch (error) {
+    console.error("Error fetching work entries:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+})
+
+app.post('/work-entries', verifytoken, async (req, res) => {
+  try {
+    const { task, hours, date, employeeEmail } = req.body;
+    const newEntry = {
+      task,
+      hours,
+      date,
+      employeeEmail,
+      createdAt: new Date(),
+    };
+
+    const result = await workEntriesCollection.insertOne(newEntry);
+
+    res.status(201).json(newEntry);
+  } catch (error) {
+    console.error('Error saving work entry:', error);
+    res.status(500).json({ error: 'Failed to save work entry' });
+  }
+});
 
 
 
