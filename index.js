@@ -64,9 +64,13 @@ async function run() {
     // Connect the client to the server
     await client.connect();
 
+    //colection
+
     const db = client.db('HRAssist');
     usersCollection = db.collection('users');
     const workEntriesCollection = db.collection("workEntries");
+    const paymentsCollection = db.collection('payments');
+    const messagesCollection = db.collection('messages');
 
   // *****************JWT****************
 
@@ -115,6 +119,22 @@ async function run() {
       }
     });
 
+    app.post('/contact', async (req, res) => {
+  const { email, message } = req.body;
+
+  if (!email || !message) {
+    return res.status(400).json({ error: 'Email and message are required' });
+  }
+
+  try {
+    await messagesCollection.insertOne({ email, message, createdAt: new Date() });
+    res.status(200).json({ message: 'Message saved successfully' });
+  } catch (error) {
+    console.error('Failed to save message:', error);
+    res.status(500).json({ error: 'Failed to save message' });
+  }
+});
+
     // *******************************User related API*******************************
     // *****************save user****************
    // Save user (for non-Google sign-ups)
@@ -162,10 +182,10 @@ async function run() {
       res.send(result)
     })
 // *****************User Dashboard Related Api****************
-app.get('worksheet/:employeeemail',async (req, res) => {
+app.get('/worksheet/:employeeemail',async (req, res) => {
   try {
     const employeeEmail = req.params.employeeemail
-    const workEntries = await workEntriesCollection.find({employeeId}).sort({date:-1}).toArray();
+    const workEntries = await workEntriesCollection.find({employeeEmail}).sort({date:-1}).toArray();
     res.send(workEntries);
   } catch (error) {
     console.error("Error fetching work entries:", error);
@@ -193,6 +213,235 @@ app.post('/work-entries', verifytoken, async (req, res) => {
   }
 });
 
+app.get("/payment-history",verifytoken, async (req, res) => {
+  const { userId } = req.user; // Assuming user is logged in and userId is available in req.user
+
+  try {
+    // Connect to the MongoDB client
+    await client.connect();
+
+   
+
+    // Fetch all payment data for the logged-in employee, sorted by year and month
+    const payments = await paymentsCollection
+      .find({ employeeId: userId }) // Filter by employeeId
+      .sort({ year: -1, month: -1 }) // Sort by year (descending) and month (descending)
+      .toArray(); // Convert the cursor to an array
+
+    res.json({
+      payments,
+    });
+  } catch (error) {
+    console.error("Error fetching payment history:", error);
+    res.status(500).json({ message: "Error fetching payment history" });
+  } finally {
+    // Ensure we close the database connection
+    await client.close();
+  }
+});
+
+// ***************** HR related APIS ****************
+
+app.get('/employees', async (req, res) => {
+  try {
+    const employees = await usersCollection.find({}).toArray();
+    res.json(employees);
+  } catch (error) {
+    console.error('Error fetching employees:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/employees/:email/verify', async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    // Find the employee by email
+    const employee = await usersCollection.findOne({ email });
+
+    if (!employee) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    // Check if isVerified field exists, if not, add it with a default value of false
+    const updatedEmployee = await usersCollection.updateOne(
+      { email },  // Use email for the query
+      {
+        $set: {
+          isVerified: employee.isVerified !== undefined ? !employee.isVerified : true
+        }
+      }
+    );
+    res.json({
+      success: true,
+      isVerified: employee.isVerified !== undefined ? !employee.isVerified : true
+    });
+  } catch (error) {
+    console.error('Error toggling verified status:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+app.get('/work-entries', async (req, res) => {
+  const { employeeEmail, month } = req.query;
+
+  try {
+    const query = {};
+
+    if (employeeEmail) query.employeeEmail = employeeEmail;
+
+    if (month) {
+      const [year, monthIndex] = month.split('-'); // "2024-11" -> year: 2024, monthIndex: 11
+      const startOfMonth = new Date(year, monthIndex - 1, 1);
+      const endOfMonth = new Date(year, monthIndex, 0);
+      query.date = { $gte: startOfMonth.toISOString(), $lte: endOfMonth.toISOString() };
+    }
+
+    const results = await workEntriesCollection.find(query).toArray();
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error fetching work entries.');
+  }
+});
+
+
+
+app.get("/employees/:slug", async (req, res) => {
+  const { slug } = req.params; // slug could be email or another unique identifier
+
+  try {
+    // Fetch employee details from `employeesCollection`
+    const employee = await paymentsCollection.findOne({ employeeEmail: slug });
+
+    if (!employee) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    // Fetch salary history from `paymentsCollection`
+    const salaryHistory = await paymentsCollection
+      .find({ employeeEmail: slug })
+      .sort({ year: 1, month: 1 }) // Sort by year and month for chart plotting
+      .toArray();
+
+    res.json({ employee, salaryHistory });
+  } catch (error) {
+    console.error("Error fetching employee details:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
+// Pay employee
+app.post('/employees/:email/pay', async (req, res) => {
+  const { email } = req.params;
+  const { month, year } = req.body;
+
+  try {
+    const employee = await usersCollection.findOne({ email });
+
+    if (!employee) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    if (!employee.isVerified) {
+      return res.status(400).json({ message: 'Cannot pay unverified employee' });
+    }
+
+    // Save payment details (this is just a log, modify as needed)
+    const paymentEntry = {
+      employeeEmail: email,
+      amount: employee.salary,
+      month,
+      year,
+      paidAt: new Date(),
+    };
+    await paymentsCollection.insertOne(paymentEntry);
+
+    res.json({ message: `Paid ${employee.salary} to ${employee.name} for ${month}/${year}` });
+  } catch (error) {
+    console.error('Error processing payment:', error);
+    res.status(500).json({ error: 'Payment processing failed' });
+  }
+});
+
+// *****************Admin routes****************
+  app.get('/verified-employees', async (req, res) => {
+  try {
+    const employees = await usersCollection.find({
+  isVerified: true,
+  isFired: { $exists: false }
+}).toArray();
+
+    res.json(employees);
+  } catch (error) {
+    console.error('Error fetching employees:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/employees/:email/fire', async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const updatedEmployee = await usersCollection.updateOne(
+      { email },
+      { $set: { isFired: true } }
+    );
+
+    if (updatedEmployee.modifiedCount === 0) {
+      return res.status(404).json({ message: 'Employee not found or already fired' });
+    }
+
+    res.json({ success: true, message: 'Employee fired' });
+  } catch (error) {
+    console.error('Error firing employee:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/employees/:email/make-hr', async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const updatedEmployee = await usersCollection.updateOne(
+      { email },
+      { $set: { role: 'HR' } }
+    );
+
+    if (updatedEmployee.modifiedCount === 0) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    res.json({ success: true, message: 'Employee promoted to HR' });
+  } catch (error) {
+    console.error('Error promoting employee to HR:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/employees/:email/salary', async (req, res) => {
+  const { email } = req.params;
+  const { salary } = req.body;  // Assuming salary is passed in the request body.
+
+  try {
+    const updatedEmployee = await usersCollection.updateOne(
+      { email },
+      { $set: { salary } }
+    );
+
+    if (updatedEmployee.modifiedCount === 0) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    res.json({ success: true, message: 'Salary updated' });
+  } catch (error) {
+    console.error('Error updating salary:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 
     // *****************logOUT****************
@@ -211,9 +460,6 @@ app.post('/work-entries', verifytoken, async (req, res) => {
   }
 });
 
-
-
-    
 
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
