@@ -3,12 +3,12 @@ const app = express()
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const port = process.env.PORT || 8000 ;
-const cookieParser = require('cookie-parser'); 
+const cookieParser = require('cookie-parser');
 require('dotenv').config();
-
+const { ObjectId } = require("mongodb");
 
 const corsOptions = {
-  origin: ['http://localhost:5173', 'http://localhost:5174'],
+  origin: ['http://localhost:5173', 'http://localhost:5174','https://hrassit-c91b1.web.app','https://hrassit-c91b1.firebaseapp.com'],
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -62,7 +62,7 @@ let usersCollection;
 async function run() {
   try {
     // Connect the client to the server
-    await client.connect();
+    // await client.connect();
 
     //colection
 
@@ -214,7 +214,8 @@ app.post('/work-entries', verifytoken, async (req, res) => {
 });
 
 app.get("/payment-history",verifytoken, async (req, res) => {
-  const { userId } = req.user; // Assuming user is logged in and userId is available in req.user
+  const { userId,email } = req.user; 
+  console.log(email)// Assuming user is logged in and userId is available in req.user
 
   try {
     // Connect to the MongoDB client
@@ -224,7 +225,7 @@ app.get("/payment-history",verifytoken, async (req, res) => {
 
     // Fetch all payment data for the logged-in employee, sorted by year and month
     const payments = await paymentsCollection
-      .find({ employeeId: userId }) // Filter by employeeId
+      .find({ employeeEmail: email }) // Filter by employeeId
       .sort({ year: -1, month: -1 }) // Sort by year (descending) and month (descending)
       .toArray(); // Convert the cursor to an array
 
@@ -440,6 +441,27 @@ app.put('/employees/:email/salary', async (req, res) => {
   } catch (error) {
     console.error('Error updating salary:', error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get all messages
+app.get("/admin/messages", async (req, res) => {
+  try {
+    const messages = await messagesCollection.find().toArray();
+    res.status(200).json(messages);
+  } catch (error) {
+    res.status(500).send("Failed to fetch messages.");
+  }
+});
+
+// Delete a message by ID
+app.delete("/admin/messages/:id",async (req, res) => {
+  const { id } = req.params;
+  try {
+    await messagesCollection.deleteOne({ _id: new ObjectId(id) });
+    res.status(200).send("Message deleted successfully.");
+  } catch (error) {
+    res.status(500).send("Failed to delete the message.");
   }
 });
 
